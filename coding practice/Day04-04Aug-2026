@@ -1,0 +1,235 @@
+Day 04 - Bacic CI/CD concepts with Jenkins & GitLab
+
+🔹 Jenkinsfile — Basic CI Pipeline
+Pipeline{
+    agent any 
+
+    environment {
+        IMAGE_Name = "amazon/ecommerce-app"
+        TAG = "${BUILD_NUMBER}"
+    }
+
+    tools{
+        jdk "JDK17"
+        maven "Maven3"
+    }
+
+    stages {
+        stage("Checkout") {
+            steps {
+                git branch : "main",
+                    url : "https://github.com/amazon/ecommerce-app.git"
+            }
+        }
+
+    stage("Build") {
+        steps {
+            sh "mvn clean package"
+        }
+    }
+
+    stage("Unit Test"){
+        steps{
+            sh "mvn test"
+        }
+    }
+
+    stage("Code Quality"){
+        steps{
+            sh "mvn sonar:sonar"
+        }
+    }
+
+    stage("Build Docker Image") {
+        steps {
+            sh "docker build -t $IMAGE_NAME:&TAG ."
+        }
+    }
+
+    stage("Push Image"){
+        steps{
+            withCredentials([usernamePassword(
+                creadentialsID: "dockerhub",
+                usernameVariable; "USER",
+                passwordVariable: "PASS"
+            )]) {
+                sh """
+                echo $PASS | docker login -u $USER --password-stdin
+                docker push $IMAGE_NAME:$TAG
+                """
+            }
+        }
+    }
+
+    stage("Deploy") {
+        steps {
+            sh "kubectl set image deployment/ecommerce app=$IMAGE_NAME:$TAG"
+        }
+    }
+
+    }
+}
+--------------------------------------------------------------------------------------------------------------
+
+
+GITLAB CI/CD
+
+# WHOLE PROCESS STAGES
+stages:
+    - build
+    - test
+    - docker
+    - deployment
+
+
+# PREDEFINED VARIALES
+variables:
+    IMAGE_NAME: registry.gitlab.com/amazon/ecommerce
+
+
+# BUILD STAGE 
+build: 
+    stage: build
+    script:
+        - mvn clean package
+    artifacts: 
+        paths:
+            - target/* .jar
+
+
+# TEST STAGE 
+test:
+    stage: test
+    script: 
+        -mvn test 
+
+
+# DOCKER CONTAINERIZING STAGE 
+docker:
+    stage: docker 
+    script:
+        - docker build -t $IMAGE_NAME:$CI_COMMIT_SHORT_SHA .
+        - docker push $IMAGE_NAME:$CI_COMMMIT_SHORT_SHA
+
+# DEPLOYMENT STAGE 
+deploy:
+    stage: deploy
+    script: 
+        - kubectl apply -f k8s/ 
+
+
+--------------------------------------------------------------------------------------------------------------
+
+
+# ANSIBLE PLAYBOOK
+
+--- 
+- name: Configure Web Server
+  hosts: webservers
+  become: yes
+
+  tasks:
+        
+    - name: Install Apache
+      yum:
+        name: httpd
+        state: present
+    
+    - name Copy Website
+      copy:
+        src:./website/
+        dest: /var/www/html/ 
+
+    - name: Start Apache
+      service: 
+        name: httpd
+        state: started 
+        enabled; yes
+    
+    - name: Open HTTP Pors
+      firewalid:
+        service: http
+        permanent: yes
+        state: enabled
+        immediate: yes
+
+--------------------------------------------------------------------------------------------------------------
+
+provider "aws" {
+    region = "ap-south-1"
+}
+
+resource "aws_security_group" "web" {
+    name = "web-sg"
+
+    ingress {
+        from_port = 22
+        to_port   = 22
+        protocol  ="tcp"
+        cidr_blocks=["0.0.0.0/32"]
+    }
+    ingress {
+        from_port   = 80
+        to_port     = 80
+        protocol    = "tcp"
+        cidr_blocks = ["0.0.0.0/0"]
+    }
+    egress {
+        from_port   = 0
+        to_port     = 0
+        protocol    = "-1"
+        cidr_blocks = ["0.0.0.0/0"]
+    }
+}
+
+resource "aws_instance" "webserver" {
+    ami                 = "0.nfen"
+    instance_type       = "t2.micro"
+    vpc_security_group_ids=[aws_security_group.web.id]
+
+    tags = {
+        Name = "Production-webserver"
+    }
+}
+
+
+--------------------------------------------------------------------------------------------------------------
+
+
+
+# DockerFILE
+
+FROM exlipse-temurin:17-jre
+
+WORKDIR  /app
+
+COPY target/ecommerce.jar app.jar
+
+EXPOSE 8000
+
+ENTRYPOINT ["java", "-jar","app.jsr"]
+
+
+
+
+
+Developer
+      │
+      ▼
+GitHub / GitLab
+      │
+      ▼
+Jenkins Pipeline
+      │
+      ├── Checkout Code
+      ├── Build (Maven/Gradle)
+      ├── Run Tests
+      ├── SonarQube Scan
+      ├── Build Docker Image
+      ├── Push Image to Docker Hub/ECR
+      └── Deploy to Kubernetes
+                   │
+                   ▼
+          Running Application
+
+
