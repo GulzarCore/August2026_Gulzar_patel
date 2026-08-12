@@ -1,0 +1,233 @@
+Day 07 — Automating Cloud Infrastructure with Terraform & Ansible (Real Flow)
+
+Terraform → Create → Ansible → Configure → Docker → Package → Kubernetes → Manage → Shell Script → Maintain
+
+
+Step 1: Terraform (Provision Infrastructure)
+
+├── terraform/
+│   ├── provider.tf
+│   ├── variables.tf
+│   ├── iam.tf
+│   ├── ec2.tf
+│   ├── outputs.tf
+│   └── terraform.tfvars
+
+-----------------------------------------------------
+# provider.tf
+
+terraform{
+    required_providers {
+        aws = {
+            source = "hashicorp/aws"
+            version = "~. 5.0"
+        }
+    }
+}
+
+provider "aws"{
+    region = var.region
+}
+
+# variables.tf
+
+variable "region" {
+    default = "ap-east-1"
+}
+
+variable "instance_type" {
+    default = "t3.mmedium"
+}
+variable "ami_id"{
+    default = "ami-0987vjnk"
+}
+
+-----------------------------------------------------
+# iam.tf
+
+resource "aws_iam_role" "ec2_role" {
+    name = "pathnex-ec2-role"
+
+    assume_role_policy = jsonencode({
+
+        version = "2012-10-17"
+
+        Statement = [
+            {
+                Effect = "Allow"
+
+                Principal = {
+                    Service = "ec2.amazonaws.com"
+                }
+
+                Action = "sts:assumeRole"
+            }
+        ]
+    })
+}
+resource "aws_iam_instance_profile" "profile" {
+    name = "pathnex-profile"
+    role = aws_iam_role.ec2_role.name 
+}
+
+-----------------------------------------------------
+ec2.tf
+
+resource "aws_instance" "web" {
+    ami                 = var.ami_id
+    instance_type       = var.instance_type
+
+    aws_iam_instance_profile= aws_iam_instance_profile.name
+
+    tags = {
+        Name ="Production-web_server"
+    }
+}
+
+
+----------------------------------------------------------------------------------------------------------
+Step 2: Ansible (Configure Server)
+
+├── ansible/
+│   ├── inventory.ini
+│   ├── nginx.yml
+│   └── files/
+│       └── nginx.conf
+
+-----------------------------------------------------
+[web]
+
+54.21.xx.xx
+
+
+-----------------------------------------------------
+nginx.yml
+
+- name: Configure nginx
+  hosts: web
+  become: yes
+  tasks: 
+    - name: Install nginx
+      yum:
+        name: nginx
+        state: present
+    
+    - name: Copy configuration
+      copy: 
+        src: files/nginx.conf
+        dest: /etx/nginx/nginx.conf
+    
+    - name: Enable Service 
+      service: 
+        name: nginx
+        state: started
+        enabled: yes 
+
+
+----------------------------------------------------------------------------------------------------------
+Step 3: Docker
+├── docker/
+│   ├── Dockerfile
+│   └── Hello.java
+
+-----------------------------------------------------
+Hello.java
+
+public class Hello {
+    public static void main(String args[]) {
+        System.out.println("Hello Pathnex");
+    }
+}
+
+
+-----------------------------------------------------
+Dockerfile
+
+FROM openjdk:17-jdk-slim
+WORKDIR /app
+COPY Hello.java .
+RUN javac Hello.java 
+CMD ["java", "hello"]
+
+--------------------
+Build
+
+docker build -t pathnex-java .
+
+--------------------
+Run 
+
+docker run pathnex-java
+
+
+
+----------------------------------------------------------------------------------------------------------
+Step 4: Kubernetes
+├── kubernetes/
+│   ├── deployment.yaml
+│   ├── service.yaml
+│   ├── configmap.yaml
+│   └── secret.yaml
+
+
+-----------------------------------------------------
+Deployment 
+
+apiversion: app/v1
+kind: Deployment
+metadata:
+    name: java-app 
+
+spec:
+    replicas: 3
+
+    selector:
+        matchLables: 
+            app: java 
+    template:
+        metadata:
+            labels:
+                app: java
+    spec:
+        containers:
+            - name java-containers
+              image: pathnex-java:latest
+              ports:
+                - containerPort: 8080
+              envFrom:
+              - configMapRef:
+                    name: app-config
+              - secretref:
+                    name: app-secret 
+
+-----------------------------------------------------
+ConfigMap
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+data:
+  APP_ENV: Production
+
+-----------------------------------------------------
+Secret
+
+apiVersion: v1
+kind: Secret
+metadata:
+  name: app-secret
+type: Opaque
+stringData:
+
+  DB_PASSWORD: password123
+
+----------------------------------------------------------------------------------------------------------
+Step 5: Shell Script
+└── scripts/
+    └── archive_logs.sh
+
+#!/bin/bash
+DATE=$(date +%F)
+tar -czf /backup/logs_$DATE.tar.gz /var/log/*.log
+echo "Logs Archived Successfully"
