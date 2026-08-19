@@ -1,0 +1,409 @@
+#  app/index.html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pathnex DevOps Day 08</title>
+</head>
+<body>
+    <h1>Hello from Pathnex</h1>
+    <p>Docker + CI/CD + Kubernetes</p>
+</body>
+</html>
+
+----------------------------------------------------------------------------------------------
+
+# DockerFile
+
+FROM    nginx:1.29-alpine
+WORKDIR /usr/share/nginx/html
+COPY    app/index.html
+EXPOSE  80
+CMD     ["nginx", "-g", "daemon off;"]
+
+----------------------------------------------------------------------------------------------
+
+# Docker-compose.yml
+
+service :
+    pathnex-app:
+        build:
+            context: .
+        image: pathnex-app:local
+        container_name: pathnex-app
+        ports:
+            - "8000:80"
+        restart: unless-stopped
+
+"CMD TO RUN"
+docker compose build
+docker compose up -d
+docker compose down 
+
+----------------------------------------------------------------------------------------------
+
+# terraform/provider.tf
+terraform{
+    required_version =">=1.6.0"
+
+    required_providers {
+        aws = {
+            source = "hashicorp/aws"
+            version = "~> 6.0"
+        }
+    }
+}
+
+provider "aws" {
+    region = var.aws_region
+}
+
+----------------------------------------------------------------------------------------------
+
+# terraform/variables.tf
+
+variable "aws_region" {
+    description = "AWS region"
+    type        = string
+    default     = "ap-south-1"
+}
+
+variable "ssh_cidr" {
+    description = "CIDR allowed to access SSH"
+    type        = string
+}
+
+variable "instance_type" {
+    description = "EC2 instance type"
+    type        = string
+    default     = "c7i-flex.large"
+}
+
+----------------------------------------------------------------------------------------------
+
+# terraform/main.tf
+
+data "aws_vpc" "default" {
+    default = true
+}
+
+data "aws_subnet" "default" {
+    filter {
+        name    = "vpc-id"
+        values  =  [data.aws_vpc.default.id]
+    }
+}
+
+data "aws_ami" "amazon_linux" {
+    most_recent = true 
+    owners      = ["1276487389734"]
+
+    filter {
+        name    = "name"
+        values  = ["alsdfjd-ami*-*86_64"]
+    }
+    filter {
+        name    = "state"
+        values  = ["available"]
+    }
+}
+
+resource "aws_security_group" "pathnex" {
+    name        = "pathnex-day08-sg"
+    description = "Security group for Pathnex Day 08"
+
+    vpc_id = data.aws_vpc.default.id 
+
+    ingress {
+        description = "SSH"
+        from_port   = 22
+        to_port     = 22
+        protocol    = "tcp"
+        cidr_blocks = [var.ssh_cidr]
+    }
+    ingress {
+        description = "HTTP"
+        from_port   = 80
+        to_port     = 80
+        protocol    = "tcp"
+        cidr_blocks = ["0.0.0.0/0"]
+    }
+
+    ingress {
+        description = "Application"
+        from_port   = 8080
+        to_port     = 8080
+        protocol    = "tcp"
+        cidr_blocks = ["0.0.0.0/0"]
+    }
+
+    egress {
+        from_port   = 0
+        to_port     = 0
+        protocol    = "-1"
+        cidr_blocks = ["0.0.0.0/0"]
+    }
+    tags = {
+        Name = "Pathnex-Day08-sg"
+    }
+}
+
+resource "aws_instance" "pathnex_ec2" {
+    ami                         = data.aws_ami.amazon_linux.id
+    instance_type               = var.instance_type
+    subnet_id                   = data.aws_subnets.default.ids[0]
+    vpc_security_group_ids      = [aws_security_group.pathnex]
+    associate_public_ip_address = true
+
+    root_block_device {
+        volume_size = 20
+        volume_type = "gp3"
+    }
+
+    ebs_block_device {
+        device_name = "/dev/sdh"
+        volume_size = 30
+        volume_type = "gp3"
+    }
+
+    tags = {
+        Name = "pathnex-day08"
+    }
+}
+
+----------------------------------------------------------------------------------------------
+
+terraform/outputs.tf
+
+output "instance_public_ip" {
+    description = "Public Ip of the EC2 instance"
+    value       = aws_instance.pathnex_ec2.public_ip
+}
+
+output "instance_id" {
+    description = "EC2 instance ID"
+    value       = aws_instance.pathnex_ec2.id
+}
+
+# terraform/terraform.tfvars
+ssh_cidr = "pulic_IP/32"
+----------------------------------------------------------------------------------------------
+
+# ANSIBLE
+
+ansible/inventory.ini
+
+[docker_hosts]
+pathnex ansible_host=our_ec2_public_ip
+
+[docker_hosts:vars]
+ansible_user=ec2-user
+ansible_ssh_private_key_file=~/.ssh/pathnex.pem
+
+
+----------------------------------------------------------------------------------------------
+
+# ansible/install-docker.yml
+
+--- 
+- name: Configure docker host 
+  hosts : docker_hosts 
+  become: true 
+
+  tasks:
+    - name: Install Docker 
+      ansible.builtin.dnf:
+        name: docker 
+        state: present 
+
+    - name: Start ans enable Docker 
+      ansible.builtin.systemd:
+        name: docker 
+        state: startted 
+        enabled: true 
+
+    - name: Add ec2-user to docker group 
+      ansible.builin.user: 
+        name: ec2-user
+        group: docker
+        append: true
+
+    - name verify Docker Installation
+      ansile.builtin.command:
+        cmd : docker --version 
+      register: docker_version 
+      changed_when: false
+
+    - name: Display Docker Version 
+      ansile.builtin.debug:
+            var: docker_version.stdout
+
+    - name: Verify Docker Compose Plugin 
+      ansible.builtin.command:
+        cmd: docker compose version 
+      register : compose_version
+      changed_when : false 
+
+      - name : Display Compose version 
+        ansible.uiltin.debug:
+            var: compose_version.stdout
+
+----------------------------------------------------------------------------------------------
+
+KUBERNETES DEPLOYMENT
+
+# k8s/deployment.yaml
+
+apiVersion: app/v1
+kind: Deployment 
+metadata:
+    name: pathnex-app 
+spec: 
+    replicas: 2
+
+    selector:
+        matchLabels:
+            app: pathnx-app 
+
+    template:
+        metadata:
+            labels: 
+                app:pathnex-app
+        spec:   
+            containers: 
+                    - name: pathnex-app
+                      images: yuour_DOCKeRHUB_USERNAME/pathnex-app:latest
+                  
+                      ports:
+                        - containerPort: 80 
+
+                      resources:
+                        requests:
+                            cpu: "100m"
+                            memory: "120Mi"
+                        limits:
+                            cpu: "500m"
+                            memory: "128Mi"
+                      readinessProbe:
+                        httpGet:
+                            path: /
+                            port: 80
+                        initialDelaySeconds: 5
+                        periodSeconds : 10
+
+                      livenessProbe:
+                        httpGet:
+                            path: /
+                            port: 80
+                        initialDelaySeconds: 10
+                        periodSecond: 20
+
+
+----------------------------------------------------------------------------------------------
+
+# k8s/service.yaml
+
+apiVersion: app/v1 
+kind: Service 
+metadata: 
+    name: pathnex-service 
+
+spec: 
+    type: NodePort 
+
+    selector: 
+        app: pathnex-app 
+
+    ports:
+        -   protocol: TCP 
+            port: 80 
+            targetPort: 80
+            nodePort: 30007
+
+# DEPLOY
+
+kubectl apply -f k8s/deployment.yaml 
+kubectl apply -f k8s/service.yaml
+
+----------------------------------------------------------------------------------------------
+
+# JENKINS CI/CD
+
+# Jenkinsfile
+
+pipeline {
+    agent any 
+
+    environment {
+        IMAGE_NAME = "YOUR_DOCKERHUB_USERNAME/pathnex-app"
+        IMAGE_TAG  = "${BUILD_NUMBER}"
+    }
+
+    stages {
+        stage('Checkout') {
+            step {
+                checkout scm
+            }
+        }
+
+        stage('Build') {
+            steps {
+                sh """
+                    docker build 
+                        -t ${IMAGE_NAME}:${IMAGE_TAG} \
+                        -t ${IMAGE_NAME}:latest \
+                        .
+                """
+            }
+        }
+
+        stage('Push') {
+            steps {
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'dockerhub-credentials',
+                        usernameVariable: 'DOCKER_USERNAME',
+                        passwordVariable: 'DOCKER_PASSWORD'
+                    )
+                ]) {
+                    sh '''
+                        echo "$DOCKER_PASSWORD" | docker login \
+                            --username "$DOCKER_USERNAME" \
+                            --password-stdin 
+                        docker push "$IMAGE_NAME:$IMAGE_TAG"
+                        docker push "$IMAGE_NAME:latest"
+
+                        docker logout
+                    '''
+                }
+            }
+        }
+    }
+}
+
+
+----------------------------------------------------------------------------------------------
+GItLAB CI/CD
+
+.gitlab-ci.yml
+
+stages:
+    - build 
+    - push 
+
+variables:
+    IMAGE_TAG: "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA"
+
+build:
+    stage: build 
+
+    script:
+        - docker build -t "$IMAGE_TAG" .
+
+push:
+    stage: push 
+
+    script: 
+        - echo "$CI_REGISTRY_PASSWORD" | docker login "$CI_REGISTRY" --username "$CI_ReGISTRY_USER" --password-stdin 
+        - docker push "$IMAGE_TAG"
